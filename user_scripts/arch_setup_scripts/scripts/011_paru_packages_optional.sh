@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
-# Optional Aur Packages you can add more packeges to this script if you'd like.
-# ==============================================================================
-# Script Name: 012_paru_packages_optional.sh
-# Description: Autonomous AUR/Repo package installer with interactive selection.
-# Context:     Arch Linux (Rolling) | Hyprland | UWSM
-# ==============================================================================
-
+# Interactive Optional package installer
+#
 # ------------------------------------------------------------------------------
-# 1. STRICT SAFETY & SETTINGS
+# 1. SETUP & SAFETY
 # ------------------------------------------------------------------------------
 set -uo pipefail
 
-# ------------------------------------------------------------------------------
-# 2. VISUALS & LOGGING
-# ------------------------------------------------------------------------------
+# Visual Constants (ANSI)
 readonly C_RESET=$'\033[0m'
 readonly C_BOLD=$'\033[1m'
+readonly C_DIM=$'\033[2m'
 readonly C_GREEN=$'\033[1;32m'
 readonly C_BLUE=$'\033[1;34m'
 readonly C_YELLOW=$'\033[1;33m'
@@ -23,270 +17,304 @@ readonly C_RED=$'\033[1;31m'
 readonly C_CYAN=$'\033[1;36m'
 readonly C_MAGENTA=$'\033[1;35m'
 
-log_info()    { printf "${C_BLUE}[INFO]${C_RESET} %s\n" "$1" >&2; }
-log_success() { printf "${C_GREEN}[SUCCESS]${C_RESET} %s\n" "$1" >&2; }
-log_warn()    { printf "${C_YELLOW}[WARN]${C_RESET} %s\n" "$1" >&2; }
-log_err()     { printf "${C_RED}[ERROR]${C_RESET} %s\n" "$1" >&2; }
-log_task()    { printf "\n${C_BOLD}${C_CYAN}:: %s${C_RESET}\n" "$1" >&2; }
+# Terminal Control
+readonly TERM_CLEAR=$'\033[2J\033[H'
+readonly CURSOR_SHOW=$'\033[?25h'
+
+# Global for cleanup trap
+_TMPFILE=""
 
 # ------------------------------------------------------------------------------
-# 3. CLEANUP & TRAPS
+# 2. LOGGING & TRAPS
 # ------------------------------------------------------------------------------
+log_info()    { printf '%s[INFO]%s %s\n' "$C_BLUE" "$C_RESET" "$*" >&2; }
+log_success() { printf '%s[SUCCESS]%s %s\n' "$C_GREEN" "$C_RESET" "$*" >&2; }
+log_warn()    { printf '%s[WARN]%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+log_err()     { printf '%s[ERROR]%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+log_task()    { printf '\n%s:: %s%s\n' "${C_BOLD}${C_CYAN}" "$*" "$C_RESET" >&2; }
+
 cleanup() {
-  tput cnorm # Restore cursor
-  printf "${C_RESET}" >&2
+    # Clean temp file if exists
+    [[ -n "$_TMPFILE" && -f "$_TMPFILE" ]] && rm -f "$_TMPFILE"
+    # Restore terminal state
+    printf '%s%s' "$CURSOR_SHOW" "$C_RESET" >&2
 }
-trap cleanup EXIT INT TERM
+
+trap cleanup EXIT
+trap 'printf "\n"; log_warn "Interrupted by user."; exit 130' INT TERM HUP
 
 # ------------------------------------------------------------------------------
-# 4. PRE-FLIGHT CHECKS
+# 3. DATA & UTILS
 # ------------------------------------------------------------------------------
-if [[ $EUID -eq 0 ]]; then
-  log_err "This script must NOT be run as root."
-  log_err "AUR helpers handle sudo privileges internally."
-  exit 1
-fi
+readonly RAW_PKG_DATA="
+Tools   | pacseek-bin           | TUI for browsing Pacman/AUR databases
+# Tools   | yayfzf                | TUI for browsing AUR databases
+# Tools   | gnome-software        | Gnome Package installer and manager
+Tools   | pamac-aur             | GUI Package installer and manager
+Tools   | keypunch-git          | Gamified typing proficiency trainer
+Tools   | kew-git               | Minimalist, efficient CLI music player
+Tools   | youtube-dl-gui-bin    | GUI wrapper for yt-dlp
+Tools   | sysmontask            | Windows-style Task Manager for Linux
+# Tools   | lazydocker            | TUI for managing Docker containers
+Productivity   | pinta                 | Simple drawing/editing tool (Paint.NET clone)
+Productivity   | gimp                  | Photoshop alternative for linux
+Productivity   | libreoffice-still     | Microsoft office alternative (Stable)
+# Productivity   | libreoffice-fresh     | Microsoft office alternative (latest)
+Games   | pipes-rs-bin          | Rust port of the classic pipes screensaver
+Games   | 2048.c                | The 2048 sliding tile game in C
+Games   | edex-ui-bin           | Sci-Fi/Tron-inspired terminal emulator
+Games   | clidle-bin            | Wordle clone for the command line
+Games   | maze-tui              | Visual maze generator and solver
+Games   | vitetris              | Classic Tetris clone for the terminal
+Security| wdpass                | Unlock Western Digital MyPassport drives
+Security| dislocker             | FUSE driver to read BitLocker partitions
+Drivers | b43-firmware          | Legacy Broadcom B43 wireless firmware
+Hardware| asusctl               | ASUS ROG/TUF control (WARNING: Long Compile Time)
+"
 
-# Determine AUR Helper (Paru > Yay)
-if command -v paru &>/dev/null; then
-  readonly AUR_HELPER="paru"
-elif command -v yay &>/dev/null; then
-  readonly AUR_HELPER="yay"
-else
-  log_err "Critical dependency missing: Neither 'paru' nor 'yay' was found."
-  exit 1
-fi
+# Bash 5+ In-Place Trimming (No Subshells)
+# Usage: trim_var variable_name
+trim_var() {
+    local -n var=$1
+    # Remove leading whitespace
+    var="${var#"${var%%[![:space:]]*}"}"
+    # Remove trailing whitespace
+    var="${var%"${var##*[![:space:]]}"}"
+}
 
-log_info "Using AUR helper: ${AUR_HELPER}"
-
-# ------------------------------------------------------------------------------
-# 5. CONFIGURATION
-# ------------------------------------------------------------------------------
-readonly AVAILABLE_PACKAGES=(
-
-"## Misc Tools"
-"pacseek-bin"
-"keypunch-git"
-"kew-git"
-"pinta"
-"youtube-dl-gui-bin"
-"sysmontask"
-"preload"
-"edex-ui-bin"
-"lazydocker"
-
-"## Games & Fun"
-"pipes-rs-bin"
-"2048.c"
-"clidle-bin"
-"maze-tui"
-"vitetris"
-"pokete"
-"brogue-ce"
-
-"## unlock encrypted drives"
-"wdpass"
-"dislocker"
-
-"## Legacy Drivers"
-"b43-firmware"
-
-"## DONT INSTALL UNLESS YOU HAVE ASUS LAPTOP; Warning!! this takes a LONG TIME TO INSTALL"
-"asusctl"
-)
-
-readonly TIMEOUT_SEC=10
-
-# ------------------------------------------------------------------------------
-# 6. SELECTION LOGIC
-# ------------------------------------------------------------------------------
-select_packages() {
-  local selection_complete=0
-  local selected_list=()
-  local user_in
-  local confirm_choice
-  local current_cat="General"
-  local clean_pkg_list=()
-
-  # 1. Prepare Data for Grid & Count
-  local pkg_count=0
-  for item in "${AVAILABLE_PACKAGES[@]}"; do
-    if [[ "$item" != "## "* ]]; then
-      ((pkg_count++))
-      clean_pkg_list+=("$item")
+check_environment() {
+    if [[ ! -t 0 || ! -t 2 ]]; then
+        log_err "This script requires an interactive terminal (TTY)."
+        exit 1
     fi
-  done
 
-  # 2. Display Grid (MODIFIED)
-  log_task "Available Optional Packages"
-  # Using 'column' to automatically fit packages into grid rows/columns based on screen width
-  printf "%s\n" "${clean_pkg_list[@]}" | column >&2
-  printf "\n" >&2
+    if [[ $EUID -eq 0 ]]; then
+        log_err "Do not run as root. AUR helpers handle sudo internally."
+        exit 1
+    fi
+}
 
-  # 3. Ask for Mode Selection
-  printf "${C_YELLOW}Select mode for %s packages: [a]ll / [s]elect / [ENTER] skip (Default): ${C_RESET}" "$pkg_count" >&2
-  read -r mode_choice
+detect_aur_helper() {
+    if command -v paru &>/dev/null; then
+        printf '%s' "paru"
+    elif command -v yay &>/dev/null; then
+        printf '%s' "yay"
+    else
+        log_err "Critical: No AUR helper found. Install 'paru' or 'yay'."
+        exit 1
+    fi
+}
 
-  case "$mode_choice" in
-    a|A)
-        # Install All
-        log_info "All packages selected for installation."
-        for item in "${AVAILABLE_PACKAGES[@]}"; do
-          [[ "$item" != "## "* ]] && printf "%s\n" "$item"
+# ------------------------------------------------------------------------------
+# 4. INTERACTIVE MENU (TUI)
+# ------------------------------------------------------------------------------
+# Writes selected packages to stdout (one per line).
+# Returns: 0 = confirmed, 1 = cancelled
+select_packages() {
+    local -a pkg_names=() pkg_descs=() pkg_groups=() pkg_status=()
+    local group pkg desc
+
+    # Parse data efficienty
+    while IFS='|' read -r group pkg desc; do
+        # Trim using references (no subshells)
+        trim_var group
+        [[ -z "$group" || "$group" == \#* ]] && continue
+
+        trim_var pkg
+        trim_var desc
+
+        pkg_groups+=("$group")
+        pkg_names+=("$pkg")
+        pkg_descs+=("$desc")
+        pkg_status+=(0)
+    done <<< "$RAW_PKG_DATA"
+
+    local total=${#pkg_names[@]}
+    local selected_count=0 last_group="" mark color input idx
+    local i # Loop variable declared once
+
+    while true; do
+        # Clear screen via stderr
+        printf '%s' "$TERM_CLEAR" >&2
+        
+        printf '%s:: Optional Package Selector%s\n' "${C_BOLD}${C_MAGENTA}" "$C_RESET" >&2
+        printf '%s   [1-%d] Toggle | [a] All | [n] None | [q] Quit | [ENTER] Install%s\n' \
+            "$C_DIM" "$total" "$C_RESET" >&2
+
+        last_group=""
+        for ((i = 0; i < total; i++)); do
+            # Group header
+            if [[ "${pkg_groups[i]}" != "$last_group" ]]; then
+                printf '\n %s[ %s ]%s\n' "${C_BOLD}${C_CYAN}" "${pkg_groups[i]}" "$C_RESET" >&2
+                last_group="${pkg_groups[i]}"
+            fi
+
+            # Checkbox state
+            if ((pkg_status[i])); then
+                mark="X"
+                color="$C_GREEN"
+            else
+                mark=" "
+                color="$C_RESET"
+            fi
+
+            printf ' [%s] %s%2d.%s %s%-20s%s : %s%s%s\n' \
+                "$mark" "$C_DIM" "$((i + 1))" "$C_RESET" \
+                "$color" "${pkg_names[i]}" "$C_RESET" \
+                "$C_DIM" "${pkg_descs[i]}" "$C_RESET" >&2
         done
-        return
-        ;;
-    s|S)
-        # Proceed to Manual Selection Loop
-        log_info "Entering manual selection mode..."
-        ;;
-    *)
-        # Default (Enter/Empty) -> Install Nothing
-        log_info "Skipping optional packages."
-        return 0
-        ;;
-  esac
 
-  # 4. Manual Selection Loop
-  while [[ $selection_complete -eq 0 ]]; do
-    selected_list=() 
-    current_cat="General"
-    
-    printf "\n${C_BOLD}--- Manual Package Selection ---${C_RESET}\n" >&2
-    printf "Instruction: Press 'y' to install, 'Enter' to skip (Default: No).\n\n" >&2
+        # Count selected
+        selected_count=0
+        for ((i = 0; i < total; i++)); do
+            ((pkg_status[i])) && ((selected_count++))
+        done
 
-    for pkg in "${AVAILABLE_PACKAGES[@]}"; do
-      if [[ "$pkg" == "## "* ]]; then
-        current_cat="${pkg:3}"
-        printf "\n${C_BOLD}${C_MAGENTA}:: Group: %s${C_RESET}\n" "$current_cat" >&2
-        continue
-      fi
+        printf '\n%s[%d selected]%s %sChoice:%s ' \
+            "$C_CYAN" "$selected_count" "$C_RESET" "$C_YELLOW" "$C_RESET" >&2
 
-      printf " :: Install ${C_CYAN}%s${C_RESET}? [y/N] " "$pkg" >&2
-      read -r user_in
-      
-      if [[ "$user_in" == "y" || "$user_in" == "Y" ]]; then
-        selected_list+=("$pkg")
-        printf "    ${C_GREEN}-> Added to queue${C_RESET}\n" >&2
-      else
-        printf "    ${C_MAGENTA}-> Skipped${C_RESET}\n" >&2
-      fi
+        read -r input
+
+        case "${input,,}" in
+            "")
+                break
+                ;;
+            q|quit)
+                log_warn "Selection cancelled."
+                return 1
+                ;;
+            a|all)
+                for ((i = 0; i < total; i++)); do pkg_status[i]=1; done
+                ;;
+            n|none)
+                for ((i = 0; i < total; i++)); do pkg_status[i]=0; done
+                ;;
+            *)
+                if [[ "$input" =~ ^[0-9]+$ ]] && ((input >= 1 && input <= total)); then
+                    idx=$((input - 1))
+                    # Toggle 0/1 using bitwise XOR or math
+                    ((pkg_status[idx] = 1 - pkg_status[idx]))
+                fi
+                ;;
+        esac
     done
 
-    # Summary
-    printf "\n${C_BOLD}--- Selection Summary ---${C_RESET}\n" >&2
-    if [[ ${#selected_list[@]} -eq 0 ]]; then
-      log_warn "No packages selected."
-    else
-      for item in "${selected_list[@]}"; do
-        printf " + %s\n" "$item" >&2
-      done
-    fi
-
-    printf "\n" >&2
-    printf "${C_YELLOW}Are you happy with this selection? [Y/n] (n = re-select) ${C_RESET}" >&2
-    read -r confirm_choice
-
-    if [[ "$confirm_choice" == "n" || "$confirm_choice" == "N" ]]; then
-      log_info "Restarting selection process..."
-      continue
-    else
-      selection_complete=1
-    fi
-  done
-
-  # Output final DATA to stdout to be captured
-  printf "%s\n" "${selected_list[@]}"
+    # Output selected packages to stdout
+    for ((i = 0; i < total; i++)); do
+        ((pkg_status[i])) && printf '%s\n' "${pkg_names[i]}"
+    done
+    return 0
 }
 
 # ------------------------------------------------------------------------------
-# 7. MAIN LOGIC
+# 5. INSTALLATION LOGIC
+# ------------------------------------------------------------------------------
+install_process() {
+    local helper="$1"
+    shift
+    local -a targets=("$@")
+
+    if ((${#targets[@]} == 0)); then
+        log_warn "No packages selected. Exiting."
+        return 0
+    fi
+
+    log_task "Checking installation status..."
+
+    local -a to_install
+    # || true is crucial to prevent pipefail if no packages are missing
+    mapfile -t to_install < <(pacman -T "${targets[@]}" 2>/dev/null || true)
+
+    if ((${#to_install[@]} == 0)); then
+        log_success "All selected packages are already installed."
+        return 0
+    fi
+
+    log_info "Packages to install: ${#to_install[@]}"
+
+    # --- Step 1: Batch Install (Fast Path) ---
+    log_task "Attempting Batch Installation..."
+    if "$helper" -S --needed --noconfirm "${to_install[@]}"; then
+        log_success "Batch installation successful."
+        return 0
+    fi
+
+    log_warn "Batch install failed. Switching to Interactive Granular Mode."
+
+    # --- Step 2: Granular Install (Safe Path) ---
+    local -a remaining
+    mapfile -t remaining < <(pacman -T "${to_install[@]}" 2>/dev/null || true)
+
+    ((${#remaining[@]} == 0)) && return 0
+
+    local fail_count=0 pkg choice
+
+    for pkg in "${remaining[@]}"; do
+        log_task "Processing: $pkg"
+
+        # Auto-retry once
+        if "$helper" -S --needed --noconfirm "$pkg"; then
+            log_success "$pkg installed."
+            continue
+        fi
+
+        log_err "Auto-install failed for $pkg."
+
+        printf '%sRetry manually to see errors? [y/N]: %s' "$C_YELLOW" "$C_RESET" >&2
+        read -r -n 1 choice
+        printf '\n' >&2
+
+        if [[ "${choice,,}" == "y" ]]; then
+            if "$helper" -S "$pkg"; then
+                log_success "$pkg installed manually."
+            else
+                log_err "$pkg failed manual install."
+                ((fail_count++))
+            fi
+        else
+            log_warn "Skipping $pkg."
+            ((fail_count++))
+        fi
+    done
+
+    # Cap exit code to 125 to avoid shell reserved codes
+    ((fail_count > 125)) && fail_count=125
+    return "$fail_count"
+}
+
+# ------------------------------------------------------------------------------
+# 6. MAIN EXECUTION
 # ------------------------------------------------------------------------------
 main() {
-  # --- Phase 1: Package Selection ---
-  mapfile -t TARGET_PACKAGES < <(select_packages)
+    check_environment
+    local aur_helper
+    aur_helper=$(detect_aur_helper)
 
-  # Check if array is empty (Default Skip)
-  if [[ ${#TARGET_PACKAGES[@]} -eq 0 ]]; then
-    log_success "No packages selected. Exiting script gracefully."
-    exit 0
-  fi
+    log_info "Starting Optional Packages Installer..."
 
-  # --- Phase 2: Installation ---
-  log_task "Starting Installation Sequence"
-  log_info "Target Packages: ${#TARGET_PACKAGES[@]}"
-  
-  local success_count=0
-  local fail_count=0
-  local failed_pkgs=()
+    # Create secure temp file to capture exit code from select_packages
+    _TMPFILE=$(mktemp) || { log_err "Failed to create temp file"; exit 1; }
 
-log_task "System Update & Sync (${AUR_HELPER} -Syu)..."
-if ! "$AUR_HELPER" -Syu --noconfirm; then
-    log_err "System update failed. Aborting to protect system integrity."
-    exit 1
-fi
-
-  for pkg in "${TARGET_PACKAGES[@]}"; do
-    [[ -z "$pkg" ]] && continue
-
-    log_task "Processing: ${pkg}"
-
-    if "$AUR_HELPER" -Qi "$pkg" &>/dev/null; then
-      log_success "${pkg} is already installed. Skipping."
-      continue
+    # Redirect stdout to file, allowing us to capture exit code of function
+    if ! select_packages > "$_TMPFILE"; then
+        rm -f "$_TMPFILE"
+        exit 0
     fi
 
-    log_info "Auto-installing ${pkg}..."
-    if "$AUR_HELPER" -S --needed --noconfirm "$pkg"; then
-      log_success "Installed ${pkg} (Auto)."
-      ((success_count++))
-    else
-      printf "\n" >&2
-      log_warn "Automatic install failed for ${pkg}."
-      printf "${C_YELLOW}  -> Conflict/Error detected. Retry manually? [y/N] (Waiting %ss)... ${C_RESET}" "$TIMEOUT_SEC" >&2
+    local -a selected_packages
+    mapfile -t selected_packages < "$_TMPFILE"
+    rm -f "$_TMPFILE"
+    _TMPFILE=""
 
-      local user_input=""
-      if read -t "$TIMEOUT_SEC" -n 1 -s user_input; then
-        if [[ "$user_input" == "y" || "$user_input" == "Y" ]]; then
-          printf "\n" >&2
-          log_info "Switching to Manual Mode for ${pkg}..."
-          
-          if "$AUR_HELPER" -S "$pkg"; then
-            log_success "Installed ${pkg} (Manual Recovery)."
-            ((success_count++))
-          else
-            log_err "Manual install also failed for ${pkg}."
-            ((fail_count++))
-            failed_pkgs+=("$pkg")
-          fi
-          continue
-        fi
-      fi
-      
-      printf "\n" >&2
-      log_err "Skipping ${pkg}."
-      ((fail_count++))
-      failed_pkgs+=("$pkg")
-    fi
-  done
-
-  # --- Summary ---
-  printf "\n" >&2
-  printf "${C_BOLD}========================================${C_RESET}\n" >&2
-  printf "${C_BOLD} INSTALLATION SUMMARY ${C_RESET}\n" >&2
-  printf "${C_BOLD}========================================${C_RESET}\n" >&2
-  log_info "Successful: ${success_count}"
-
-  if [[ $fail_count -gt 0 ]]; then
-    log_err "Failed: ${fail_count}"
-    log_err "The following packages failed to install:"
-    for f in "${failed_pkgs[@]}"; do
-      printf "   - %s\n" "$f" >&2
+    # Filter empty lines
+    local -a final_list=()
+    local item
+    for item in "${selected_packages[@]}"; do
+        [[ -n "$item" ]] && final_list+=("$item")
     done
-  else
-    log_success "All requested packages processed successfully."
-  fi
-  printf "\n" >&2
+
+    # Bash safe array expansion
+    install_process "$aur_helper" "${final_list[@]}"
 }
 
 main "$@"
