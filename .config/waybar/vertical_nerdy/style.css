@@ -65,8 +65,8 @@ tooltip label {
 #cpu, #memory, #backlight, #tray, #temperature, #custom-notification, 
 #custom-inhibit-suspend, #custom-power, #custom-theme,
 #custom-network {
-    padding-left: 2px;
-    padding-right: 3px;
+    padding-left: 0px;
+    padding-right: 0px;
     margin: 4px 3px;
     padding-top: 0;
     padding-bottom: 0;
